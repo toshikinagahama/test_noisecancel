@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.4.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@0.0.1/dist/face-landmarks-detection.js"></script>
+    <title>Noise Cancel</title>
+  </head>
+  <body>
+    Noise Cancel<br />
+    <button type="button" onclick="startVideo();">Start Video</button>
+    <button type="button" onclick="stopVideo();">Stop Video</button>
+    <button type="button" onclick="faceModelLoad();">Face Model Load</button>
+    <button type="button" onclick="startAudio();">Audio start</button>
+    <audio src="tv.mp3"></audio>
+    <div>
+      <video
+        id="local_video"
+        autoplay
+        style="width: 160px; height: 120px; border: 1px solid black"
+      ></video>
+      <video
+        id="remote_video"
+        autoplay
+        controls
+        style="width: 160px; height: 120px; border: 1px solid black"
+      ></video>
+    </div>
+  </body>
+  <script type="text/javascript">
+    let localVideo = document.getElementById("local_video");
+    let localStream = null;
+
+    var audioctx = new AudioContext();
+    var panner = new PannerNode(audioctx, { panningModel: "HRTF" });
+    var isLoadedWebcam = false;
+    var model;
+
+    async function faceModelLoad() {
+      // MediaPipe facemeshモデルアセットのロード
+      console.log("model is loading");
+      model = await faceLandmarksDetection.load(
+        faceLandmarksDetection.SupportedPackages.mediapipeFacemesh
+      );
+      console.log("model is loaded");
+    }
+
+    // --- prefix -----
+    navigator.getUserMedia =
+      navigator.getUserMedia ||
+      navigator.webkitGetUserMedia ||
+      navigator.mozGetUserMedia ||
+      navigator.msGetUserMedia;
+    RTCPeerConnection =
+      window.RTCPeerConnection ||
+      window.webkitRTCPeerConnection ||
+      window.mozRTCPeerConnection;
+    RTCSessionDescription =
+      window.RTCSessionDescription ||
+      window.webkitRTCSessionDescription ||
+      window.mozRTCSessionDescription;
+
+    // ---------------------- media handling -----------------------
+    // start local video
+    function startVideo() {
+      getDeviceStream({ video: true, audio: true })
+        .then(function (stream) {
+          // success
+          localStream = stream;
+          localVideo.srcObject = stream;
+          localVideo.onloadedmetadata = async function (e) {
+            //localVideo.play();
+            //localVideo.muted = "true";
+            isLoadedWebcam = true;
+          };
+
+          playVideo(localVideo, stream);
+        })
+        .catch(function (error) {
+          // error
+          console.error("getUserMedia error:", error);
+          return;
+        });
+    }
+
+    // stop local video
+    function stopVideo() {
+      pauseVideo(localVideo);
+      stopLocalStream(localStream);
+    }
+
+    function stopLocalStream(stream) {
+      let tracks = stream.getTracks();
+      if (!tracks) {
+        console.warn("NO tracks");
+        return;
+      }
+
+      for (let track of tracks) {
+        track.stop();
+      }
+    }
+
+    function getDeviceStream(option) {
+      if ("getUserMedia" in navigator.mediaDevices) {
+        console.log("navigator.mediaDevices.getUserMadia");
+        return navigator.mediaDevices.getUserMedia(option);
+      } else {
+        console.log("wrap navigator.getUserMadia with Promise");
+        return new Promise(function (resolve, reject) {
+          navigator.getUserMedia(option, resolve, reject);
+        });
+      }
+    }
+
+    function startAudio() {
+      audioctx.resume();
+      let cnt = 0;
+      const el = document.querySelector("audio");
+      const source = audioctx.createMediaElementSource(el);
+      source.connect(panner).connect(audioctx.destination);
+      el.loop = true;
+      el.play();
+    }
+
+    function playVideo(element, stream) {
+      if ("srcObject" in element) {
+        element.srcObject = stream;
+      } else {
+        element.src = window.URL.createObjectURL(stream);
+      }
+      element.muted = "true";
+      //element.play();
+      //element.volume = 0;
+    }
+
+    function pauseVideo(element) {
+      element.pause();
+      if ("srcObject" in element) {
+        element.srcObject = null;
+      } else {
+        if (element.src && element.src !== "") {
+          window.URL.revokeObjectURL(element.src);
+        }
+        element.src = "";
+      }
+    }
+
+    function sleep(waitMsec) {
+      var startMsec = new Date();
+
+      // 指定ミリ秒間だけループさせる（CPUは常にビジー状態）
+      while (new Date() - startMsec < waitMsec);
+    }
+
+    const estimateFace = async () => {
+      //console.log(isLoadedWebcam);
+      if (isLoadedWebcam && model != null) {
+        const faces = await model.estimateFaces({
+          input: localVideo,
+          returnTensors: false,
+          flipHorizontal: false,
+        });
+        if (faces.length > 0) {
+          //上->10、下->152、右->454、左->234
+          let p1 = faces[0].scaledMesh[10];
+          let p2 = faces[0].scaledMesh[454];
+          let p3 = faces[0].scaledMesh[152];
+          let p4 = faces[0].scaledMesh[234];
+          let sub1 = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
+          let sub2 = [p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]];
+          let cross = [
+            sub1[1] * sub2[2] - sub1[2] * sub2[1],
+            sub1[2] * sub2[0] - sub1[0] * sub2[2],
+            sub1[0] * sub2[1] - sub1[1] * sub2[0],
+          ];
+          let norm = Math.sqrt(
+            cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]
+          );
+          cross[0] /= norm;
+          cross[1] /= norm;
+          cross[2] /= norm;
+          console.log(cross);
+          //向きによって、ノイズの音量を変える。
+          if (panner.positionY != null) {
+            //panner.positionX.value = 10 * cross[0];
+            let tmp = Math.abs(cross[1]);
+            tmp = Math.sqrt(tmp);
+            if (tmp == 0) tmp = 0.000001;
+            panner.positionY.value = 0.5 / tmp;
+          }
+        }
+      }
+      sleep(100);
+      requestAnimationFrame(estimateFace);
+    };
+    estimateFace();
+  </script>
+</html>
