@@ -35,6 +35,7 @@
     var panner = new PannerNode(audioctx, { panningModel: "HRTF" });
     var isLoadedWebcam = false;
     var model;
+    var vals = [0, 0, 0, 0, 0];
 
     async function faceModelLoad() {
       // MediaPipe facemeshモデルアセットのロード
@@ -187,7 +188,15 @@
             let tmp = Math.abs(cross[1]);
             tmp = Math.sqrt(tmp);
             if (tmp == 0) tmp = 0.000001;
-            panner.positionY.value = 0.5 / tmp;
+            vals.push(tmp); //移動平均用
+            vals.shift();
+            let sum = 0;
+
+            for (let i = 0; i < vals.length; i++) {
+              sum += vals[i];
+            }
+            sum /= vals.length;
+            panner.positionY.value = 0.5 / sum;
           }
         }
       }
